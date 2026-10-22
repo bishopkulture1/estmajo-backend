@@ -1,0 +1,15 @@
+.env
+backend/.env
+.venv/
+node_modules/
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-*
+backend/data/
+backend/staticfiles/
+frontend/dist/
+*.tsbuildinfo
+backups/
+
+netlify-public-preview/
