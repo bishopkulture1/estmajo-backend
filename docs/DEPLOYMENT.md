@@ -1,0 +1,141 @@
+# Installation, integrations and deployment
+
+For the approved free hosting setup, use [Render Free + Neon PostgreSQL](RENDER.md) and root `render.yaml`; no Render disk is configured. The Docker/Caddy workflow below remains available for a standalone server.
+
+## Required inputs
+
+1. Confirmed branding is **ESTMAJO ENGINEERING SOLUTIONS LTD**, RC **7810123**. The supplied original logo is bundled unchanged at `frontend/public/brand/estmajo-logo.jpg` and displayed in the header, home feature and footer. The Warri address, public email and two complete telephone numbers are installed by migration `0003`. Only the two confirmed telephone numbers are included.
+2. Obtain one Linux server with Docker Compose, a persistent local disk, backups, DNS control and outbound HTTPS/SMTP. Use a single instance and a single SQLite database. The included configuration uses one Gunicorn worker with four threads and a Docker named volume. Do not scale the app service to multiple containers.
+3. Obtain ImageKit account access, a private API key with appropriate media access and the delivery URL endpoint. Enter these directly into the server environment. Do not paste private credentials into website fields or commit them to source control.
+4. Obtain SMTP credentials, verified sending domain/address, TLS mode and provider access. Configure SPF, DKIM and DMARC using your email provider’s instructions. The authenticated `DEFAULT_FROM_EMAIL` is the sender; the visitor’s validated email is only `Reply-To`.
+5. Choose the private enquiry recipient inside the authenticated owner dashboard. It may differ from the public email address.
+
+Netlify sign-in was completed and the public design preview is live at https://estmajo-engineering-solutions.netlify.app/ . Persistent Django hosting, SMTP and ImageKit activation remain outstanding; the full CMS is not yet live. See PUBLIC_PREVIEW.md.
+
+## Production with Docker Compose and Caddy
+
+DNS A/AAAA records must point to the server. Open ports 80 and 443, and keep the application port 8000 inaccessible from the internet. Install current Docker Engine and the Compose plugin using your server platform’s official instructions.
+
+From the source directory:
+
+```bash
+cp .env.example .env
+cp backend/.env.example backend/.env
+chmod 600 .env backend/.env
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Copy the generated secret into `backend/.env`. Fill in the root `.env`:
+
+```dotenv
+DOMAIN=your-real-domain
+ACME_EMAIL=your-real-certificate-contact-email
+```
+
+Fill in `backend/.env` without quotes around comma-separated host lists:
+
+```dotenv
+DEBUG=false
+SECRET_KEY=your-generated-secret
+ALLOWED_HOSTS=your-real-domain
+CSRF_TRUSTED_ORIGINS=https://your-real-domain
+SQLITE_PATH=/data/db.sqlite3
+```
+
+The above host/domain/email names are instructions, not seeded company data. Set the ImageKit and email variables described below. Leave integration values empty if you need to finish company content first; the dashboard will indicate missing configuration, uploads will explain the missing setup, and enquiries will still be saved with failed notification status.
+
+```bash
+docker compose build
+docker compose up -d
+docker compose logs --tail=100 app web
+docker compose exec app python manage.py createsuperuser
+```
+
+Enter the owner username, email and strong password interactively. `createsuperuser` creates an active staff account, which the React dashboard requires. Login at `https://your-real-domain/owner`.
+
+Caddy requests and renews HTTPS certificates. Persistent `caddy_data` and `caddy_config` volumes retain certificate state; `company_data` retains SQLite. `app` has no exposed host port. Only Caddy may set the trusted `X-Real-IP` and forwarded HTTPS headers. When adding another proxy, review trusted-proxy handling and prevent forged IP headers; throttling relies on this boundary.
+
+Do not use `docker compose down -v` on a production installation: it deletes volumes. Never place the SQLite file on an ephemeral container layer, serverless function filesystem or independently scaled instances. Keep the named volume on the same durable host disk; do not use a shared network filesystem for SQLite. Move to a coordinated database architecture before multi-instance scaling.
+
+## ImageKit setup
+
+Set on the Django server only:
+
+```dotenv
+IMAGEKIT_PRIVATE_KEY=
+IMAGEKIT_URL_ENDPOINT=
+MAX_IMAGE_BYTES=10485760
+MAX_VIDEO_BYTES=104857600
+MAX_DOCUMENT_BYTES=20971520
+```
+
+Use the endpoint shown in the ImageKit dashboard, e.g. its full HTTPS URL with your account identifier. Uploads are proxied through Django and permitted only to active staff accounts. Supported formats: JPEG, PNG, WebP, MP4, WebM and PDF. SVG is deliberately excluded. Local signatures/container headers and image decoding are checked before upload, then the backend fetches provider metadata, checks MIME type, size and privacy, and records the provider file ID in SQLite.
+
+Uploads are marked private. Delivery URLs are generated by the official ImageKit Python SDK, expire after one hour and include signed responsive image variants. Public APIs return URLs only for approved visible company assets, published content, gallery selections and public documents. Drafts and unapproved PDFs are not listed publicly. A previously issued signed link may remain valid for up to one hour after unpublishing. Disable named transformations capable of bypassing your intended private-file policy in your ImageKit account. Do not add publicly accessible alternate origins for private draft files.
+
+PDFs use ImageKit Media Library as durable object storage, rather than local container storage. ImageKit supports non-image assets and signed delivery of private files; **your actual account’s PDF acceptance, file limits and successful download must still be checked during activation**. The test suite mocks the provider contract. Confirm MP4/H.264/AAC or WebM codec support on your target browsers; a file extension alone cannot guarantee browser decoding.
+
+For video accessibility, provide a useful description and a caption/transcript in the attachment caption field. Avoid publishing speech-dependent video without the necessary transcript; this implementation does not generate automatic captions.
+
+The proxy body cap is 110 MB. If increasing backend upload limits, increase Caddy’s request limit and any upstream proxy limit accordingly. Large files require enough temporary disk space on the server and a suitable timeout. At 100% transferred, the UI waits for server verification.
+
+The media library’s Unused filter shows assets without database references. The read-only `python manage.py media_audit` command compares `/esmajo` assets with SQLite to identify remote uploads left orphaned by interruptions. Review the output manually; do not delete unknown assets without confirming they are unused elsewhere. Failed metadata checks attempt remote cleanup and log file IDs if cleanup fails.
+
+## Email setup
+
+```dotenv
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=
+EMAIL_PORT=587
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+EMAIL_USE_TLS=true
+EMAIL_USE_SSL=false
+DEFAULT_FROM_EMAIL=
+```
+
+For implicit TLS on port 465, set `EMAIL_USE_SSL=true` and `EMAIL_USE_TLS=false`. Do not enable both. A transactional provider that exposes SMTP is supported through this configuration. Set the private enquiry recipient in Company Information & Contact Settings.
+
+Enquiries are committed to SQLite before sending. The state is `pending`, `sending`, `accepted`, `failed` (configuration missing), or `unknown` (acceptance could not be confirmed). A successful SMTP return means the provider accepted the message, **not** that the message reached an inbox. No inbox-delivery claim is made; provider delivery/bounce webhooks are not implemented. Investigate provider logs for delivery evidence.
+
+The submission UUID prevents a repeat form request from creating a second enquiry. A conditional database update claims notifications so routine simultaneous retries cannot send twice. A network failure after provider acceptance can be ambiguous. For `unknown`, the dashboard requires explicit duplicate-risk confirmation before retrying. A `sending` record cannot be retried until five minutes have elapsed; check provider logs and confirm a retry only if needed. SMTP cannot provide a universal exactly-once delivery guarantee. No background retry occurs automatically.
+
+## Accounts and recovery
+
+- Create the owner with interactive `createsuperuser`; never ship passwords in frontend code or files.
+- Session cookies are HTTP-only, SameSite=Lax and Secure in production. CSRF protection applies to authenticated API writes and anonymous login/enquiry POSTs. Login is rate-limited (10 attempts / 15 minutes / client IP); enquiries are limited to 5 attempts / hour / client IP and use a honeypot.
+- Password changes require the current password and Django’s password validators. Logout invalidates the session.
+- To recover an account after verifying the owner’s identity through your established process:
+
+```bash
+docker compose exec app python manage.py changepassword OWNER_USERNAME
+```
+
+- To revoke all active sessions immediately:
+
+```bash
+docker compose exec app python manage.py shell -c "from django.contrib.sessions.models import Session; Session.objects.all().delete()"
+```
+
+- Use server SSH/MFA and protect access to backups and environment files. Periodically remove expired sessions with `manage.py clearsessions`.
+
+## Updates and verification
+
+Before source updates, create and export a consistent database backup (see BACKUP.md). Then:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Company content changes require only Save Changes, never a rebuild. Public API responses disable caching; the website refreshes data after owner saves, when the browser returns to focus, and every five minutes. A manual page refresh always fetches latest data.
+
+Run Django’s deployment checks with the real production environment:
+
+```bash
+docker compose exec app python manage.py check --deploy
+```
+
+HSTS is enabled for one year and includes subdomains. HSTS preload is intentionally not enabled: review every subdomain and your long-term HTTPS policy before opting into browser preload. A preload warning is expected until that separate operational decision is made.
+
+Complete the activation checklist in VERIFICATION.md. Do not announce the site as live until HTTPS, login, saves after application restart, real email acceptance/delivery, uploads/downloads and mobile browser behaviour have been observed.
