@@ -1,0 +1,31 @@
+# Free Render backend + external Neon PostgreSQL. No paid disks or Render database.
+services:
+  - type: web
+    name: estmajo-backend
+    runtime: python
+    region: frankfurt
+    plan: free
+    numInstances: 1
+    autoDeployTrigger: "off"
+    rootDir: backend
+    buildCommand: bash bin/render-build.sh
+    startCommand: bash bin/render-start.sh
+    healthCheckPath: /_health/
+    maxShutdownDelaySeconds: 250
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.15
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://estmajo-engineering-solutions.netlify.app
+      - key: NETLIFY_PROXY_SECRET
+        sync: false
+      - key: EMAIL_BACKEND
+        value: core.email_backend.ResendEmailBackend
+      # Add optional DATABASE_URL_DIRECT and private integration/setup secrets in Render.
+      # BOOTSTRAP_ADMIN_USERNAME/PASSWORD create only the first owner (see docs/RENDER.md).
