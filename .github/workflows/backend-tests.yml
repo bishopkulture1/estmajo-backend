@@ -1,0 +1,37 @@
+
+name: ESTMAJO Backend Django Tests
+
+on:
+  push:
+    branches:
+      - estmajo_backend_update
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.lock.txt
+
+      - name: Run Django tests
+        env:
+          DEBUG: "true"
+          SECRET_KEY: "github-actions-test-secret-key-at-least-32-characters"
+        run: python backend/manage.py test core
+
+      - name: Check database migrations
+        env:
+          DEBUG: "true"
+          SECRET_KEY: "github-actions-test-secret-key-at-least-32-characters"
+        run: python backend/manage.py makemigrations --check --dry-run
+        
